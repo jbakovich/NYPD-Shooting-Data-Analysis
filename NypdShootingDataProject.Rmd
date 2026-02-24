@@ -1,0 +1,131 @@
+---
+title: "NYPD Shooting Data Analysis"
+author: "J. Bakovich"
+date: "2026-02-17"
+output: html_document
+---
+## Introduction
+This document is an analysis of shooting data presented by the New York Police Department, beginning in the year 2006 (the link for the data is provided [here](https://data.cityofnewyork.us/api/views/98wc-x49t/rows.csv?accessType=DOWNLOAD)). This document works through importing, tidying, and analyzing/modeling the data, as well as providing some potential source of bias.
+
+This document attempts to answer the following questions: 
+
+  1. Are shooting number different across all of the boroughs of New York? And if so, by how much?
+  
+  2. How do the number of shootings compare across different hours of the day? Does it follow a linear pattern?
+```{r, echo=FALSE}
+rm(list = ls())
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+url_in <- "https://data.cityofnewyork.us/api/views/98wc-x49t/rows.csv?accessType=DOWNLOAD"
+shooting_data <- read_csv(url_in)
+```
+
+
+## Shooting Data Summary
+Below is a snapshot of the data that was imported. It breaks down different shooting incidents through their date/time of occurrence and location (borough, precinct, latitude/longitude, etc.).
+```{r summary, echo=FALSE}
+summary(shooting_data)
+```
+
+
+## Cleaning/Tidying the Data
+To tidy and clean the data into the format that I desire (and eliminating bad data), I did the following:
+
+  - Converted the occurrence data into a date object
+  - Created new columns that describe the date in different ways: year, hour, day_of_week
+  - Filtered out rows that did not have occurrence dates or boroughs listed
+  - Selected only the rows that I care to interpret
+
+In doing this cleanup, I not only eliminated bad data, but I also mutated the data with only columns that I desire.
+
+How I did this is shown in the code block below:
+
+```{r clean}
+shootings_clean <- shooting_data %>%
+  rename_with(tolower) %>%
+  mutate(
+    occur_date = as.Date(occur_date, format = "%m/%d/%Y"),
+    year = format(occur_date, "%Y"),
+    hour = as.integer(substr(occur_time, 1, 2)),
+    day_of_week = weekdays(occur_date)
+  ) %>%
+  filter(!is.na(occur_date), !is.na(boro), !is.na(hour)) %>%
+  select(-c("incident_key", "loc_of_occur_desc", "precinct","jurisdiction_code", 
+            "loc_classfctn_desc", "location_desc", "x_coord_cd", "y_coord_cd", 
+            "latitude","longitude"))
+
+```
+
+## Visualizing the Data
+I chose to visualize the data in multiple ways: shootings by borough and shootings by hour as they are related to the day of the week.
+
+The bar graph below shows the number of shootings by borough. As shown, the number of shootings in Brooklyn was the highest of any borough by a significant margin, while the shooting in Staten Island were the minimum. However, as discussed below, the number of shootings per borough is highly dependent on the fact that reporting accuracy is equal across all boroughs. If the reporting accuracy is skewed in different locations, the data contextualizing shooting by borough will not be correct. This could be considered a source of bias. 
+
+```{r visualize_by_boro}
+shootings_by_boro <- shootings_clean %>%
+  count(boro, sort = TRUE)
+
+ggplot(shootings_by_boro, aes(x = boro, y = n)) +
+  geom_col() +
+  labs(
+    title = "NYC Shooting Incidents by Borough",
+    x = "Borough",
+    y = "Number of Shootings"
+  )
+```
+
+
+The graph below displays a heat map of the day of the week relative to the hour of the day. The brighter colors symbolize higher numbers of shootings on average, while dark colors relate to less shootings. In looking at the graph, one can interpret that more shootings occur on weekends, especially more doing the nighttime hours of the day. 
+```{r visualize_by_hour_day}
+
+shootings_heatmap <- shootings_clean %>%
+  count(day_of_week, hour)
+
+shootings_heatmap$day_of_week <- factor(
+  shootings_heatmap$day_of_week,
+  levels = c("Sunday", "Monday", "Tuesday", "Wednesday", 
+             "Thursday", "Friday", "Saturday")
+)
+
+ggplot(shootings_heatmap, aes(x = hour, y = day_of_week, fill = n)) +
+  geom_tile(color = "white") +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "NYC Shooting Incidents: Hour × Day of Week Heatmap",
+    x = "Hour of Day",
+    y = "Day of Week",
+    fill = "Shootings"
+  )
+```
+
+
+## Modeling the Data
+The graph below shows predictive analysis as a linear regression model for shooting incidents across NY as related to the hour of the day, shifted to show that as the day progresses into the night, shootings increase. However, the graph shows that the hour of the day is not quite linearly related to the number of shootings and more parabolic. Nonetheless, the data does show that through certain hours of the night, shootings significantly increase, while shootings during the day happen less. 
+```{r model_shootings}
+shootings_hour <- shootings_clean %>%
+  count(hour) %>%
+  mutate(shifted_hour = (hour-7) %%24 )
+
+model <- lm(n ~ shifted_hour, data=shootings_hour)
+
+shootings_hour_pred <- shootings_hour %>% mutate(pred = predict(model))
+
+shootings_hour_pred %>% ggplot() +
+  geom_point(aes(x = shifted_hour, y = n), color="blue") +
+  geom_line(aes(x = shifted_hour, y = pred, group = 1), color="red")+
+  labs(
+    title = "Linear Regression of Shootings Over Hour",
+    x = "Shifted Hour of Day (0 is 7 AM)",
+    y = "Shootings",
+  )
+```
+
+
+## Conclusion / Source of Bias
+After cleaning, analyzing, and modeling the data, the data proves that 1) the number of shootings differs greatly across boroughs, and 2) shooting numbers differ across different times of day, but it does not follow a linear pattern (more of a parabolic pattern). The number of shootings in Brooklyn is the largest of the boroughs by a large margin, while the number of shootings in Staten Island is much less than any other borough. The number of shooting across the day show that shooting typically happen more in the night time hours, with lows typically around 7AM. As shown in the heatmap above, these numbers are also different across the days of the week.
+
+Through analyzing the data, a significant source of bias could come from the reporting side of the incidents. This data only contextualizes shooting incidents that were reported. Therefore, if there are larger amount of misreporting or failure to report in certain communities (or even boroughs), then the data would be skewed away from shootings in those communities. Thus, bias is present in the data favoring shootings in communities that are better are reporting (and doing so accurately).
