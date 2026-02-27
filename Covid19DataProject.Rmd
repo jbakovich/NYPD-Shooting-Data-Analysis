@@ -1,0 +1,211 @@
+---
+title: "COVID 19 Data Report"
+author: "J. Bakovich"
+date: "2026-02-23"
+output: html_document
+---
+
+## Introduction
+This document is an analysis of US and Global COVID-19 data presented by the Johns Hopkins GitHub website. The process conducted consists of importing, tidying, and analyzing/modeling the data, as well as providing some potential source of bias.
+
+Through analysis, this document attempts to answer the following questions:
+
+1. Which countries were the leaders in total case numbers and total death numbers?
+2. How did the fatality rate of COVID-19 change over time? Did the date the vaccine was outsourced affect these results?
+3. Globally, did the number of deaths match predictive analysis based on cases?
+
+```{r, echo=FALSE}
+rm(list = ls())
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- 
+  c("time_series_covid19_confirmed_global.csv",
+    "time_series_covid19_deaths_global.csv",
+    "time_series_covid19_confirmed_US.csv",
+    "time_series_covid19_deaths_US.csv")
+
+urls <- str_c(url_in, file_names)
+
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+```
+
+## Cleaning/Tidying the Data
+To tidy and clean the data into the desired format, the following was completed:
+
+  * Pivoted the data to leverage the number of cases and deaths for each date, for each province/region
+  * Joined cases and deaths together into the same tables ('US' and 'global')
+
+```{r tidy_global_data, echo=TRUE, warning=FALSE, message=FALSE}
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat,Long)) %>%
+  mutate(date = mdy(date))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat,Long)) %>%
+  mutate(date = mdy(date))
+
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region', Province_State = 'Province/State')
+```
+
+
+```{r tidy_US_data, echo=TRUE, warning=FALSE, message=FALSE}
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  select(-c(Lat, Long_)) %>%
+  mutate(date = mdy(date))
+
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  select(-c(Lat, Long_)) %>%
+  mutate(date = mdy(date))
+
+US <- US_cases %>% full_join(US_deaths)
+```
+## Visualizing the Data
+### Part 1
+To answer the first question "Which countries were the leaders in total case numbers and total death numbers?", we must clean and rearrange the data further. The functions below group the global "cases" and "deaths" tables by Country/Region, determine the sum of all cases/deaths in that region, and arrange that data to determine the top contenders for both cases and deaths. Then, the top 10 of each were graphed -- these graphs are shown below.
+```{r top_10_countries_cases_and_deaths, echo=TRUE, warning=FALSE, message=FALSE}
+top_cases <- global %>%
+  group_by(Country_Region) %>%
+  summarise(total_cases = max(cases, na.rm = TRUE)) %>%
+  arrange(desc(total_cases)) %>%
+  slice_head(n = 10)
+
+ggplot(top_cases, aes(x = reorder(Country_Region, total_cases),
+                       y = total_cases)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Top 10 Countries by Total COVID-19 Cases",
+    x = "Country",
+    y = "Total Cases"
+  )
+
+top_deaths <- global %>%
+  group_by(Country_Region) %>%
+  summarise(total_deaths = max(deaths, na.rm = TRUE)) %>%
+  arrange(desc(total_deaths)) %>%
+  slice_head(n = 10)
+
+ggplot(top_deaths, aes(x = reorder(Country_Region, total_deaths),
+                        y = total_deaths)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Top 10 Countries by Total COVID-19 Deaths",
+    x = "Country",
+    y = "Total Deaths"
+  )
+```
+
+As shown by the figures, the US leads substantially in both the cases and death numbers. However, the rankings of cases and deaths vary by country following the American leaders. For example, India ranks #2 in cases but is #3 in deaths. An even stronger difference is Russia at #10 in cases, but rising to #4 in death totals. 
+
+### Part 2
+The second question(s), "How did the fatality rate of COVID-19 change over time? Did the date the vaccine was outsourced affect these results?", can be answered by plotting the fatality over time. The line graph below shows this plot, separating the global and US only trends. The vertical line represents the date that vaccines were first publicly administered.
+
+```{r analyze_deaths_per_case_over_time, echo=TRUE, warning=FALSE, message=FALSE}
+global_daily <- global %>%
+  filter(cases > 100) %>%
+  group_by(date) %>%
+  summarise(
+    total_cases  = sum(cases, na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE)
+  ) %>%
+  mutate(
+    death_rate = total_deaths / total_cases
+  )
+
+US_daily <- US %>%
+  filter(cases > 100) %>%
+  group_by(date) %>%
+  summarise(
+    total_cases  = sum(cases, na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE)
+  ) %>%
+  mutate(
+    death_rate = total_deaths / total_cases
+  )
+
+death_rate_df <- bind_rows(
+  global_daily %>% mutate(region = "Global"),
+  US_daily %>% mutate(region = "US")
+)
+
+ggplot(death_rate_df, aes(x = date, y = death_rate, color = region)) +
+  geom_line(size = 1) +
+  labs(
+    title = "COVID-19 Case Fatality Rate Over Time",
+    subtitle = "Global vs United States",
+    x = "Date",
+    y = "Case Fatality Rate (Deaths / Cases)",
+    color = "Region"
+  ) +
+  geom_vline(xintercept = as.Date("2020-12-14"), 
+             color = "green", linetype = "dashed", size = 1)
+  
+```
+
+Interestingly enough, the initial US fatality rate was much higher than that of the global, but over time, the rate dropped below its global counterpart and remained that way. Also, it is significant how the death rate (for both global and US only) months prior to the vaccine being introduced to world. This raises further questioning -- why did the fatality rates drop? Were people gaining immunity for some reason? Nonetheless, since the vaccine had been introduced, the total fatality rates continued to plummet until mid-2023, where they are relatively non-existent.
+
+## Modeling the Data
+To answer the third and final question, "Globally, did the number of deaths match predictive analysis based on cases?", the graph below plot a linear regression model using lagged cases versus the number of deaths. This graph is meant to show how well the number of deaths matched case numbers from previous (with the weight of case to death ratio from that lagged point). From this, we can determine how well the deaths at a certain point matched the case totals (times fatality rate weight), from a week or so in the past.
+
+```{r modeling_lagged_cases, echo=TRUE}
+global_daily_lagged <- global_daily %>%
+  mutate(
+    cases_lag7  = lag(total_cases, 7),
+    cases_lag14 = lag(total_cases, 14)
+  ) %>%
+  drop_na()
+
+model <- lm(total_deaths ~ cases_lag7 + cases_lag14, data = global_daily_lagged)
+summary(model)
+
+global_daily_lagged <- global_daily_lagged %>%
+  mutate(predicted_deaths = predict(model, newdata = global_daily_lagged))
+
+ggplot(global_daily_lagged, aes(x = date)) +
+  geom_line(aes(y = total_deaths, colour = "Actual")) +
+  geom_line(aes(y = predicted_deaths, colour = "Predicted"), linetype = "dashed") +
+    labs(
+    title = "Actual vs Predicted Global COVID-19 Deaths",
+    y = "Deaths",
+    x = "Date"
+  ) +
+  scale_color_manual(name = "Deaths", values = c("Actual" = "black", "Predicted" = "red"))
+
+```
+
+
+Based on the plot shown, the trend shows the predicted deaths matches the actual deaths relatively well, with some minor discrepancies. Most significantly, the predicted rate falls below the actual in early 2021. This is significant because the vaccine (as shown above) become public ally available in late 2020. This makes sense, however, because the prediction comes as a result of the number of cases lagged by a certain group of duration. As deaths continued to rise, the number of cases fell as a result of the vaccine. Then, around the start of 2022, the number of cases and deaths began to even out, justifying why the line overlap more following that date.
+
+## Conclusion and Sources of Bias
+This report explored global and domestic COVID-19 trends through cleaning, visualization, and predictive modeling of Johns Hopkins GitHub data. By building the data from the ground up, meaningful insights were extracted regarding country-wide case and death totals, changes in fatality rate over time, and the relationships between cases and their subsequent deaths.
+
+The results proved that the US has the highest reported numbers in cases and deaths. The change in fatality rates showed that fatality rates decreased heavily over time, notably following the introduction of the vaccine as well as other treatment protocols like increasing testing and earlier detection. The predictive modeling using lagged case data demonstrated that global deaths could be generally estimated using prior infection counts, supporting the consistent relationship between cases and future mortality.
+
+However, several sources of bias may affect these conclusions. One of these sources is the widespread under reporting of infections/death, especially in the early stages of the pandemic. These reporting failures are very likely to have skewed the data set in the early months, underestimated the number of cases and deaths. Another source of bias is difference in testing availability, especially in regards to global standards. While countries like the US, Russia, and India led the number of cases and deaths, this does not necessarily mean they lead, but rather they lead in reported cases and deaths. It is probable that other countries be contenders as leaders of cases and deaths (or cases and deaths per capita) if testing availablity was equivalent worldwide.
